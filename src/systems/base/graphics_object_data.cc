@@ -216,7 +216,14 @@ void GraphicsObjectData::PrintStringVector(
 }
 
 Rect GraphicsObjectData::SrcRect(const GraphicsObject& go) {
-  return CurrentSurface(go)->GetPattern(go.GetPattNo()).rect;
+  // Nothing to draw right now (a parent layer, an empty text object): an
+  // empty rect. Rendering checks CurrentSurface() before asking, but hit
+  // tests and keyboard menus ask about any visible object, and on wasm the
+  // null dereference did not trap but called through a garbage vtable.
+  std::shared_ptr<const Surface> surface = CurrentSurface(go);
+  if (!surface)
+    return Rect();
+  return surface->GetPattern(go.GetPattNo()).rect;
 }
 
 Point GraphicsObjectData::DstOrigin(const GraphicsObject& go) {

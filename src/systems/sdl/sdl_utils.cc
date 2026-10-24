@@ -25,16 +25,17 @@
 //
 // -----------------------------------------------------------------------
 
-#include "GL/glew.h"
-
 #include "systems/sdl/sdl_utils.h"
 
-#include <SDL/SDL.h>
-#include <SDL/SDL_opengl.h>
+#include <SDL.h>
+#include <SDL_opengl.h>
+#include <SDL_opengl_glext.h>
 
 #include <cassert>
 #include <string>
 #include <sstream>
+#include <iomanip>
+#include <iostream>
 
 #include "systems/base/system_error.h"
 #include "systems/base/rect.h"
@@ -44,11 +45,23 @@
 
 void ShowGLErrors(void) {
   GLenum error;
-  const GLubyte* err_str;
   if ((error = glGetError()) != GL_NO_ERROR) {
-    err_str = gluErrorString(error);
     std::ostringstream oss;
-    oss << "OpenGL Error: " << (char*)err_str;
+    oss << "OpenGL Error: " << std::hex << error;
+#if defined(__EMSCRIPTEN__)
+    // WebGL ignores a call it rejects and carries on, so the worst a stray
+    // error costs is one wrong frame. Ending the game for it did not: deep
+    // into a skip through Clannad, an INVALID_VALUE (501) at a background
+    // change (SEEN9050) closed rlvm. Logged instead, and the queue drained.
+    static int reported = 0;
+    if (reported < 20) {
+      ++reported;
+      std::cerr << oss.str() << " (ignored)" << std::endl;
+    }
+    while (glGetError() != GL_NO_ERROR) {
+    }
+    return;
+#endif
     throw SystemError(oss.str());
   }
 }
@@ -56,7 +69,7 @@ void ShowGLErrors(void) {
 // -----------------------------------------------------------------------
 
 bool IsNPOTSafe() {
-  static bool is_safe = GLEW_VERSION_2_0 && GLEW_ARB_texture_non_power_of_two;
+  static bool is_safe = SDL_GL_ExtensionSupported("GL_ARB_texture_non_power_of_two");
   return is_safe;
 }
 
@@ -113,7 +126,7 @@ SDL_Surface* AlphaInvert(SDL_Surface* in_surface) {
     throw SystemError("AlphaInvert requires an alpha channel!");
 
   // Build a copy of the surface
-  SDL_Surface* dst = SDL_AllocSurface(in_surface->flags,
+  SDL_Surface* dst = SDL_CreateRGBSurface(in_surface->flags,
                                       in_surface->w,
                                       in_surface->h,
                                       format->BitsPerPixel,
@@ -160,6 +173,10 @@ void RGBColourToSDLColor(const RGBColour& in, SDL_Color* out) {
   out->r = in.r();
   out->g = in.g();
   out->b = in.b();
+  // SDL2's SDL_Color has an alpha channel, and SDL_ttf 2.20+ multiplies
+  // blended text by it. Leaving it unset rendered glyphs with whatever alpha
+  // was on the stack (invisible, faded or normal letters).
+  out->a = 255;
 }
 
 // -----------------------------------------------------------------------

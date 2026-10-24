@@ -880,10 +880,7 @@ void parseNames(const Memory& memory,
         // Try to read a second character. We don't care if it fails.
         ReadFullwidthLatinLetter(cur, strindex);
       } else {
-        // It was "as-is" character, not a name reference.
-        output += (char)0x81;
-        output += type;
-        continue;
+        throw rlvm::Exception("Malformed name construct in bytecode!");
       }
 
       int index = Memory::ConvertLetterIndexToInt(strindex);

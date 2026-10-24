@@ -242,6 +242,9 @@ class TextWindow {
 
   void EndSelectionMode();
 
+  // On-screen rectangles of the current selection items (keyboard selection).
+  std::vector<Rect> GetSelectionRects() const;
+
  protected:
   // Accessor for the |selection_callback_| for TextWindow subclasses
   const std::function<void(int)>& selectionCallback() {

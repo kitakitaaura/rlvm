@@ -26,6 +26,7 @@
 // -----------------------------------------------------------------------
 
 #include <boost/archive/text_iarchive.hpp>  // NOLINT
+#include <cassert>
 #include <boost/archive/text_oarchive.hpp>  // NOLINT
 #include <boost/serialization/vector.hpp>   // NOLINT
 
@@ -543,6 +544,16 @@ int RLMachine::SceneNumber() const {
 
 const libreallive::Scenario& RLMachine::Scenario() const {
   return *call_stack_.back().scenario;
+}
+
+int RLMachine::InstructionIndex() const {
+  auto it = find_if(call_stack_.rbegin(), call_stack_.rend(),
+                    [](const StackFrame& frame) {
+                      return frame.frame_type != StackFrame::TYPE_LONGOP;
+                    });
+  if (it == call_stack_.rend())
+    return -1;
+  return std::distance(it->scenario->begin(), it->ip);
 }
 
 void RLMachine::ExecuteExpression(const libreallive::ExpressionElement& e) {

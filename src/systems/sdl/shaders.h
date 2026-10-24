@@ -27,7 +27,7 @@
 #ifndef SRC_SYSTEMS_SDL_SHADERS_H_
 #define SRC_SYSTEMS_SDL_SHADERS_H_
 
-#include <SDL/SDL_opengl.h>
+#include <SDL_opengl.h>
 
 class GraphicsObject;
 
@@ -43,6 +43,11 @@ class Shaders {
   // Returns the parameters for the color mask program.
   static GLint getColorMaskUniformCurrentValues();
   static GLint getColorMaskUniformMask();
+#if defined(__EMSCRIPTEN__)
+  // Sum of the mask quad's top and bottom texture y coordinates, used by the
+  // Emscripten color mask vertex shader to derive the mask's texcoords.
+  static GLint getColorMaskUniformMaskYSum();
+#endif
 
   // Returns the shader that implements tint/light/colour on objects.
   static GLuint GetObjectProgram();
@@ -62,13 +67,17 @@ class Shaders {
 
  private:
   // Compiles and links the text program in |shader| into a shader and program
-  // object.
-  static void buildShader(const char* shader, GLuint* program_object);
+  // object. |vertex_shader| is only used by Emscripten builds, which need an
+  // explicit vertex stage; null selects a pass-through vertex shader.
+  static void buildShader(const char* shader,
+                          GLuint* program_object,
+                          const char* vertex_shader = nullptr);
 
   static GLuint color_mask_program_object_id_;
   static GLuint color_mask_shader_object_id_;
   static GLint color_mask_current_values_;
   static GLint color_mask_mask_;
+  static GLint color_mask_mask_y_sum_;
 
   static GLuint object_program_object_id_;
   static GLuint object_shader_object_id_;

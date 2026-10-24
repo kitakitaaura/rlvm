@@ -94,8 +94,16 @@ fs::path FindFontFileFinal(Gameexe& gexe, const std::string& fileName) {
 
   if (fs::exists(filePath))
     return filePath;
-  else
-    return fs::path();
+
+#if defined(__EMSCRIPTEN__)
+  // No native OS font paths exist in MEMFS. Fall back to the font bundled
+  // with the wasm build (see web/app.js, which preloads it to this path).
+  fs::path bundled("/fonts/fallback.ttf");
+  if (fs::exists(bundled))
+    return bundled;
+#endif
+
+  return fs::path();
 }
 
 // -----------------------------------------------------------------------

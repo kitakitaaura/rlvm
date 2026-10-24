@@ -27,7 +27,7 @@
 
 #include "systems/sdl/sdl_music.h"
 
-#include <SDL/SDL_mixer.h>
+#include <SDL_mixer.h>
 #include <boost/algorithm/string.hpp>
 #include <boost/filesystem/operations.hpp>
 #include <functional>
@@ -188,10 +188,18 @@ void SDLMusic::MixMusic(void* udata, Uint8* stream, int len) {
   }
 
   if (cur_vol != SDL_MIX_MAXVOLUME) {
+    // SDL_MixAudio only knows SDL2's legacy audio device, which is never
+    // opened (SDL_mixer opens its own), so it mixed nothing: the stream was
+    // left zeroed and music went silent at any volume but the maximum, which
+    // is what a save's restored settings produce (255 / 2 = 127). Mix in
+    // SDL_mixer's actual format instead.
+    int frequency = 0, channels = 0;
+    Uint16 format = AUDIO_S16SYS;
+    Mix_QuerySpec(&frequency, &format, &channels);
     char stream_dup[len];  // NOLINT
     memcpy(stream_dup, stream, len);
     memset(stream, 0, len);
-    SDL_MixAudio(stream, (Uint8*)stream_dup, len, cur_vol);
+    SDL_MixAudioFormat(stream, (Uint8*)stream_dup, format, len, cur_vol);
   }
 }
 

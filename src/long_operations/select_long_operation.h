@@ -78,10 +78,18 @@ class SelectLongOperation : public LongOperation {
   // Returns the underlying list of options.
   std::vector<std::string> GetOptions() const;
 
+  // Whether option `num` is on screen and can be picked.
+  bool IsSelectable(int num) const {
+    return num >= 0 && num < static_cast<int>(options_.size()) &&
+           options_[num].shown && options_[num].enabled;
+  }
+
   // Overridden from LongOperation:
   virtual bool operator()(RLMachine& machine) override;
 
  protected:
+  void ReportChoice();
+
   RLMachine& machine_;
 
   // A list of the string literals of the options.
@@ -105,6 +113,7 @@ class NormalSelectLongOperation : public SelectLongOperation {
   // Overridden from EventListener:
   virtual void MouseMotion(const Point&) override;
   virtual bool MouseButtonStateChanged(MouseButton mouseButton, bool pressed) override;
+  virtual bool KeyStateChanged(KeyCode key_code, bool pressed) override;
 
  private:
   std::shared_ptr<TextWindow> text_window_;
@@ -127,6 +136,7 @@ class ButtonSelectLongOperation : public SelectLongOperation,
   virtual void MouseMotion(const Point&) override;
   virtual bool MouseButtonStateChanged(MouseButton mouseButton,
                                        bool pressed) override;
+  virtual bool KeyStateChanged(KeyCode key_code, bool pressed) override;
 
   // Overridden from Renderable:
   virtual void Render(std::ostream* tree) override;

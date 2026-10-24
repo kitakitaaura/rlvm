@@ -25,7 +25,13 @@
 // -----------------------------------------------------------------------
 
 #include "long_operations/select_long_operation.h"
+#include "long_operations/keyboard_selection.h"
 
+#if defined(__EMSCRIPTEN__)
+#include <emscripten.h>
+#endif
+
+#include <cstdio>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -123,11 +129,59 @@ SelectLongOperation::SelectLongOperation(RLMachine& machine,
 
     options_.push_back(o);
   }
+
+  ReportChoice();
 }
 
 SelectLongOperation::~SelectLongOperation() {}
 
+#if defined(__EMSCRIPTEN__)
+namespace {
+std::string JsonString(const std::string& in) {
+  std::string out = "\"";
+  for (unsigned char c : in) {
+    if (c == '"' || c == '\\') {
+      out += '\\';
+      out += c;
+    } else if (c < 0x20) {
+      char buf[8];
+      snprintf(buf, sizeof(buf), "\\u%04x", c);
+      out += buf;
+    } else {
+      out += c;
+    }
+  }
+  return out + "\"";
+}
+}  // namespace
+#endif
+
+// noberu: tells the page a choice is on screen (its scene, line, instruction
+// number and options),
+// for the walkthrough (assets/walkthrough.js), which can answer through
+// rlvm_select() in wasm/main_wasm.cc.
+void SelectLongOperation::ReportChoice() {
+#if defined(__EMSCRIPTEN__)
+  std::string json = "{\"seen\":" + std::to_string(machine_.SceneNumber()) +
+                     ",\"line\":" + std::to_string(machine_.line_number()) +
+                     ",\"pos\":" + std::to_string(machine_.InstructionIndex()) +
+                     ",\"options\":[";
+  for (size_t i = 0; i < options_.size(); ++i) {
+    if (i)
+      json += ",";
+    json += "{\"text\":" + JsonString(options_[i].str) +
+            ",\"shown\":" + (options_[i].shown ? "true" : "false") + "}";
+  }
+  json += "]}";
+  EM_ASM({ if (Module.noberuChoice) Module.noberuChoice(UTF8ToString($0)); },
+         json.c_str());
+#endif
+}
+
 void SelectLongOperation::SelectByIndex(int num) {
+#if defined(__EMSCRIPTEN__)
+  EM_ASM({ if (Module.noberuChoiceMade) Module.noberuChoiceMade($0); }, num);
+#endif
   if (machine_.system().sound().HasSe(1))
     machine_.system().sound().PlaySe(1);
   machine_.system().TakeSelectionSnapshot(machine_);
@@ -228,6 +282,11 @@ bool NormalSelectLongOperation::MouseButtonStateChanged(MouseButton mouseButton,
   }
 
   return false;
+}
+
+bool NormalSelectLongOperation::KeyStateChanged(KeyCode key_code, bool pressed) {
+  return HandleSelectionKey(machine_, text_window_->GetSelectionRects(),
+                            key_code, pressed);
 }
 
 // -----------------------------------------------------------------------
@@ -434,6 +493,15 @@ bool ButtonSelectLongOperation::MouseButtonStateChanged(MouseButton mouseButton,
   }
 
   return false;
+}
+
+bool ButtonSelectLongOperation::KeyStateChanged(KeyCode key_code, bool pressed) {
+  std::vector<Rect> rects;
+  for (size_t i = 0; i < buttons_.size(); i++) {
+    if (options_[i].enabled)
+      rects.push_back(buttons_[i].bounding_rect);
+  }
+  return HandleSelectionKey(machine_, rects, key_code, pressed);
 }
 
 void ButtonSelectLongOperation::Render(std::ostream* tree) {

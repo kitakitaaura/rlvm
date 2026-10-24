@@ -25,6 +25,7 @@
 // -----------------------------------------------------------------------
 
 #include "long_operations/button_object_select_long_operation.h"
+#include "long_operations/keyboard_selection.h"
 
 #include "machine/rlmachine.h"
 #include "systems/base/graphics_object.h"
@@ -130,6 +131,18 @@ bool ButtonObjectSelectLongOperation::MouseButtonStateChanged(
   }
 
   return false;
+}
+
+bool ButtonObjectSelectLongOperation::KeyStateChanged(KeyCode key_code,
+                                                      bool pressed) {
+  std::vector<Rect> rects;
+  for (ButtonPair& button_pair : buttons_) {
+    if (button_pair.first->has_object_data()) {
+      GraphicsObjectData* data = &button_pair.first->GetObjectData();
+      rects.push_back(data->DstRect(*button_pair.first, button_pair.second));
+    }
+  }
+  return HandleSelectionKey(machine_, rects, key_code, pressed);
 }
 
 bool ButtonObjectSelectLongOperation::operator()(RLMachine& machine) {

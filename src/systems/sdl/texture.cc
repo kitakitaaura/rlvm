@@ -25,10 +25,24 @@
 //
 // -----------------------------------------------------------------------
 
-#include "GL/glew.h"
+#include <SDL.h>
+#include <SDL_opengl.h>
 
-#include <SDL/SDL.h>
-#include <SDL/SDL_opengl.h>
+#if defined(__EMSCRIPTEN__)
+// See wasm/gl_upload_compat.cc: WebGL/GLES2 can't do GL_BGRA +
+// UNSIGNED_INT_8_8_8_8_REV or internalformat != format, both of which this
+// file's glTexImage2D/glTexSubImage2D calls rely on.
+extern "C" void WasmTexImage2D(unsigned target, int level, int internalformat,
+                               int width, int height, int border,
+                               unsigned format, unsigned type,
+                               const void* pixels);
+extern "C" void WasmTexSubImage2D(unsigned target, int level, int xoffset,
+                                  int yoffset, int width, int height,
+                                  unsigned format, unsigned type,
+                                  const void* pixels);
+#define glTexImage2D WasmTexImage2D
+#define glTexSubImage2D WasmTexSubImage2D
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -90,11 +104,20 @@ Texture::Texture(SDL_Surface* surface,
   glBindTexture(GL_TEXTURE_2D, texture_id_);
   DebugShowGLErrors();
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+#if !defined(__EMSCRIPTEN__)
+  // GL_TEXTURE_WRAP_R doesn't exist for 2D textures in GLES2/WebGL (no 3D
+  // wrap dimension); T defaults to GL_REPEAT already, matching S here.
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_R, GL_REPEAT);
+#endif
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-  if (w == total_width_ && h == total_height_) {
+  // Only hand surface->pixels straight to GL when its rows are tightly packed.
+  // SDL_ttf 2.20+ pads each row of rendered text surfaces for SIMD alignment
+  // (pitch > w * bpp); those take the row-by-row copy below instead of
+  // shearing.
+  if (w == total_width_ && h == total_height_ &&
+      surface->pitch == surface->w * surface->format->BytesPerPixel) {
     SDL_LockSurface(surface);
     glTexImage2D(GL_TEXTURE_2D,
                  0,
@@ -234,7 +257,9 @@ void Texture::reupload(SDL_Surface* surface,
                        int byte_type) {
   glBindTexture(GL_TEXTURE_2D, texture_id_);
 
-  if (w == total_width_ && h == total_height_) {
+  // See the pitch note in the constructor.
+  if (w == total_width_ && h == total_height_ &&
+      surface->pitch == surface->w * surface->format->BytesPerPixel) {
     SDL_LockSurface(surface);
 
     glTexSubImage2D(GL_TEXTURE_2D,
@@ -327,13 +352,20 @@ void Texture::RenderToScreen(const Rect& src, const Rect& dst, int opacity) {
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glBegin(GL_QUADS);
   {
+    // The colour is repeated per vertex: Emscripten's immediate-mode
+    // emulation only records a colour for vertices where glColor is called
+    // but sizes every vertex as if it had one, so a single glColor call
+    // misaligns the whole quad's vertex data.
     glColor4ub(255, 255, 255, opacity);
     glTexCoord2f(thisx1, thisy1);
     glVertex2i(fdx1, fdy1);
+    glColor4ub(255, 255, 255, opacity);
     glTexCoord2f(thisx2, thisy1);
     glVertex2i(fdx2, fdy1);
+    glColor4ub(255, 255, 255, opacity);
     glTexCoord2f(thisx2, thisy2);
     glVertex2i(fdx2, fdy2);
+    glColor4ub(255, 255, 255, opacity);
     glTexCoord2f(thisx1, thisy2);
     glVertex2i(fdx1, fdy2);
   }
@@ -350,7 +382,8 @@ void Texture::RenderToScreenAsColorMask(const Rect& src,
                                         const RGBAColour& rgba,
                                         int filter) {
   if (filter == 0) {
-    if (GLEW_ARB_fragment_shader && GLEW_ARB_multitexture) {
+    if (SDL_GL_ExtensionSupported("GL_ARB_fragment_shader") &&
+        SDL_GL_ExtensionSupported("GL_ARB_multitexture")) {
       render_to_screen_as_colour_mask_subtractive_glsl(src, dst, rgba);
     } else {
       render_to_screen_as_colour_mask_subtractive_fallback(src, dst, rgba);
@@ -414,47 +447,70 @@ void Texture::render_to_screen_as_colour_mask_subtractive_glsl(
       GL_TEXTURE_2D, 0, 0, 0, idx1, ystart, texture_width_, texture_height_);
   DebugShowGLErrors();
 
-  glUseProgramObjectARB(Shaders::getColorMaskProgram());
+  glUseProgram(Shaders::getColorMaskProgram());
 
   // Put the back_texture in texture slot zero and set this to be the
   // texture "current_values" in the above shader program.
-  glActiveTextureARB(GL_TEXTURE0_ARB);
+  glActiveTexture(GL_TEXTURE0);
   glEnable(GL_TEXTURE_2D);
   glBindTexture(GL_TEXTURE_2D, back_texture_id_);
-  glUniform1iARB(Shaders::getColorMaskUniformCurrentValues(), 0);
+  glUniform1i(Shaders::getColorMaskUniformCurrentValues(), 0);
 
   // Put the mask in texture slot one and set this to be the
   // texture "mask" in the above shader program.
-  glActiveTextureARB(GL_TEXTURE1_ARB);
+  glActiveTexture(GL_TEXTURE1);
   glEnable(GL_TEXTURE_2D);
   glBindTexture(GL_TEXTURE_2D, texture_id_);
-  glUniform1iARB(Shaders::getColorMaskUniformMask(), 1);
+  glUniform1i(Shaders::getColorMaskUniformMask(), 1);
 
   glDisable(GL_BLEND);
 
+#if defined(__EMSCRIPTEN__)
+  // Only unit 0 texcoords survive Emscripten's immediate-mode emulation; the
+  // color mask vertex shader derives the mask's (unit 1) coordinates from
+  // them. Colour is repeated per vertex; see Texture::RenderToScreen.
+  glUniform1f(Shaders::getColorMaskUniformMaskYSum(), thisy1 + thisy2);
   glBegin(GL_QUADS);
   {
     glColorRGBA(rgba);
-    glMultiTexCoord2fARB(GL_TEXTURE0_ARB, thisx1, thisy2);
-    glMultiTexCoord2fARB(GL_TEXTURE1_ARB, thisx1, thisy1);
+    glTexCoord2f(thisx1, thisy2);
     glVertex2i(fdx1, fdy1);
-    glMultiTexCoord2fARB(GL_TEXTURE0_ARB, thisx2, thisy2);
-    glMultiTexCoord2fARB(GL_TEXTURE1_ARB, thisx2, thisy1);
+    glColorRGBA(rgba);
+    glTexCoord2f(thisx2, thisy2);
     glVertex2i(fdx2, fdy1);
-    glMultiTexCoord2fARB(GL_TEXTURE0_ARB, thisx2, thisy1);
-    glMultiTexCoord2fARB(GL_TEXTURE1_ARB, thisx2, thisy2);
+    glColorRGBA(rgba);
+    glTexCoord2f(thisx2, thisy1);
     glVertex2i(fdx2, fdy2);
-    glMultiTexCoord2fARB(GL_TEXTURE0_ARB, thisx1, thisy1);
-    glMultiTexCoord2fARB(GL_TEXTURE1_ARB, thisx1, thisy2);
+    glColorRGBA(rgba);
+    glTexCoord2f(thisx1, thisy1);
     glVertex2i(fdx1, fdy2);
   }
   glEnd();
+#else
+  glBegin(GL_QUADS);
+  {
+    glColorRGBA(rgba);
+    glMultiTexCoord2f(GL_TEXTURE0, thisx1, thisy2);
+    glMultiTexCoord2f(GL_TEXTURE1, thisx1, thisy1);
+    glVertex2i(fdx1, fdy1);
+    glMultiTexCoord2f(GL_TEXTURE0, thisx2, thisy2);
+    glMultiTexCoord2f(GL_TEXTURE1, thisx2, thisy1);
+    glVertex2i(fdx2, fdy1);
+    glMultiTexCoord2f(GL_TEXTURE0, thisx2, thisy1);
+    glMultiTexCoord2f(GL_TEXTURE1, thisx2, thisy2);
+    glVertex2i(fdx2, fdy2);
+    glMultiTexCoord2f(GL_TEXTURE0, thisx1, thisy1);
+    glMultiTexCoord2f(GL_TEXTURE1, thisx1, thisy2);
+    glVertex2i(fdx1, fdy2);
+  }
+  glEnd();
+#endif
 
-  glActiveTextureARB(GL_TEXTURE1_ARB);
+  glActiveTexture(GL_TEXTURE1);
   glDisable(GL_TEXTURE_2D);
-  glActiveTextureARB(GL_TEXTURE0_ARB);
+  glActiveTexture(GL_TEXTURE0);
 
-  glUseProgramObjectARB(0);
+  glUseProgram(0);
   glEnable(GL_BLEND);
   glBlendFunc(GL_ONE, GL_ZERO);
 }
@@ -500,10 +556,13 @@ void Texture::render_to_screen_as_colour_mask_subtractive_fallback(
     glColorRGBA(rgba);
     glTexCoord2f(thisx1, thisy1);
     glVertex2i(fdx1, fdy1);
+    glColorRGBA(rgba);
     glTexCoord2f(thisx2, thisy1);
     glVertex2i(fdx2, fdy1);
+    glColorRGBA(rgba);
     glTexCoord2f(thisx2, thisy2);
     glVertex2i(fdx2, fdy2);
+    glColorRGBA(rgba);
     glTexCoord2f(thisx1, thisy2);
     glVertex2i(fdx1, fdy2);
   }
@@ -541,10 +600,13 @@ void Texture::render_to_screen_as_colour_mask_additive(const Rect& src,
     glColorRGBA(rgba);
     glTexCoord2i(thisx1, thisy1);
     glVertex2f(fdx1, fdy1);
+    glColorRGBA(rgba);
     glTexCoord2i(thisx2, thisy1);
     glVertex2f(fdx2, fdy1);
+    glColorRGBA(rgba);
     glTexCoord2i(thisx2, thisy2);
     glVertex2f(fdx2, fdy2);
+    glColorRGBA(rgba);
     glTexCoord2i(thisx1, thisy2);
     glVertex2f(fdx1, fdy2);
   }
@@ -649,19 +711,20 @@ void Texture::RenderToScreenAsObject(const GraphicsObject& go,
     bool using_shader = false;
     if ((go.light() || go.tint() != RGBColour::Black() ||
          go.colour() != RGBAColour::Clear() || go.mono() || go.invert()) &&
-        GLEW_ARB_fragment_shader && GLEW_ARB_multitexture) {
+        SDL_GL_ExtensionSupported("GL_ARB_fragment_shader") &&
+        SDL_GL_ExtensionSupported("GL_ARB_multitexture")) {
       // Image
-      glActiveTexture(GL_TEXTURE0_ARB);
+      glActiveTexture(GL_TEXTURE0);
       glEnable(GL_TEXTURE_2D);
       glBindTexture(GL_TEXTURE_2D, texture_id_);
-      glUseProgramObjectARB(Shaders::GetObjectProgram());
-      glUniform1iARB(Shaders::GetObjectUniformImage(), 0);
+      glUseProgram(Shaders::GetObjectProgram());
+      glUniform1i(Shaders::GetObjectUniformImage(), 0);
 
       // Colour/Tint/Etc.
       Shaders::loadObjectUniformFromGraphicsObject(go);
 
       // Alpha.
-      glUniform1fARB(Shaders::GetObjectUniformAlpha(), alpha / 255.0f);
+      glUniform1f(Shaders::GetObjectUniformAlpha(), alpha / 255.0f);
 
       // Our final blending color has to be all white here.
       using_shader = true;
@@ -706,7 +769,7 @@ void Texture::RenderToScreenAsObject(const GraphicsObject& go,
     glEnd();
 
     if (using_shader) {
-      glUseProgramObjectARB(0);
+      glUseProgram(0);
     }
 
     glBlendEquation(GL_FUNC_ADD);

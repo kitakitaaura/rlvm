@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <ostream>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -769,6 +770,13 @@ void TextWindow::StartSelectionMode() { in_selection_mode_ = true; }
 
 void TextWindow::SetSelectionCallback(const std::function<void(int)>& in) {
   selection_callback_ = in;
+}
+
+std::vector<Rect> TextWindow::GetSelectionRects() const {
+  std::vector<Rect> rects;
+  for (const auto& selection : selections_)
+    rects.push_back(selection->GetRect());
+  return rects;
 }
 
 void TextWindow::EndSelectionMode() {

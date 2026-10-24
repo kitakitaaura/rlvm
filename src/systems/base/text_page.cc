@@ -328,6 +328,29 @@ void TextPage::Replay(bool is_active_page) {
            [&](Command& c) { RunTextPageCommand(c, is_active_page); });
 }
 
+// noberu: the text shown since the last click wait, for its reading tools.
+// PauseLongOperation hands it to the page (NoberuTextFlush).
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+namespace {
+std::string noberu_text;
+std::string noberu_name;
+}  // namespace
+
+void NoberuTextFlush() {
+  if (noberu_text.empty()) return;
+#ifdef __EMSCRIPTEN__
+  EM_ASM({
+    if (Module.noberuText) {
+      Module.noberuText(HEAPU8.slice($0, $0 + $1), HEAPU8.slice($2, $2 + $3));
+    }
+  }, noberu_text.data(), (int)noberu_text.size(), noberu_name.data(), (int)noberu_name.size());
+#endif
+  noberu_text.clear();
+  noberu_name.clear();
+}
+
 // ------------------------------------------------- [ Public operations ]
 
 bool TextPage::Character(const string& current, const string& rest) {
@@ -340,6 +363,7 @@ bool TextPage::Character(const string& current, const string& rest) {
     }
 
     elements_to_replay_.back().characters.append(current);
+    noberu_text.append(current);
 
     number_of_chars_on_page_++;
   }
@@ -348,6 +372,7 @@ bool TextPage::Character(const string& current, const string& rest) {
 }
 
 void TextPage::Name(const string& name, const string& next_char) {
+  noberu_name = name;
   AddAction(Command(TYPE_NAME, name, next_char));
   number_of_chars_on_page_++;
 }

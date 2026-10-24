@@ -44,6 +44,10 @@ class TextTextPageElement;
 // The majority of public methods in TextPage simply call the private versions
 // of these methods, and add the appropriate TextPageElement to this page's
 // back log for replay.
+// noberu: hands the text shown since the last call to the page (its reading
+// tools), then forgets it. Called when the game waits for a click.
+void NoberuTextFlush();
+
 class TextPage {
  public:
   TextPage(System& system, int window_num);

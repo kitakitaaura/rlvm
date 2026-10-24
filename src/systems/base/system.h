@@ -33,7 +33,6 @@
 #include <boost/filesystem/path.hpp>
 
 #include <map>
-#include <memory>
 #include <sstream>
 #include <string>
 #include <utility>

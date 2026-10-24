@@ -27,10 +27,11 @@
 
 #include "systems/sdl/sdl_event_system.h"
 
-#include <SDL/SDL.h>
+#include <SDL.h>
 
 #include <functional>
 
+#include "long_operations/keyboard_selection.h"
 #include "machine/rlmachine.h"
 #include "systems/base/event_listener.h"
 #include "systems/base/graphics_system.h"
@@ -84,18 +85,17 @@ void SDLEventSystem::ExecuteEventSystem(RLMachine& machine) {
           HandleMouseButtonEvent(machine, event);
         break;
       }
+      case SDL_MOUSEWHEEL:
+        HandleWheelEvent(machine, event);
+        break;
       case SDL_QUIT:
         machine.Halt();
         break;
-      case SDL_ACTIVEEVENT:
+      case SDL_WINDOWEVENT:
         if (raw_handler_)
           raw_handler_->pushInput(event);
-        HandleActiveEvent(machine, event);
+        HandleWindowEvent(machine, event);
         break;
-      case SDL_VIDEOEXPOSE: {
-        machine.system().graphics().ForceRefresh();
-        break;
-      }
     }
   }
 }
@@ -151,9 +151,11 @@ void SDLEventSystem::InjectMouseUp(RLMachine& machine) {
   button1_state_ = 2;
   button2_state_ = 0;
 
+  // A release (upstream passed 1 here, so an injected click was two presses
+  // and never completed).
   DispatchEvent(
       machine,
-      bind(&EventListener::MouseButtonStateChanged, _1, MOUSE_LEFT, 1));
+      bind(&EventListener::MouseButtonStateChanged, _1, MOUSE_LEFT, 0));
 }
 
 void SDLEventSystem::PreventCursorPosSpinning() {
@@ -172,6 +174,33 @@ void SDLEventSystem::PreventCursorPosSpinning() {
   last_get_currsor_time_ = newTime;
 }
 
+namespace {
+
+// rlvm's KeyCode values are SDL 1.2 keysyms. SDL2 numbers every non-ASCII key
+// differently (SDLK_UP is 0x40000052, not 273), so those keys never matched
+// the RLKEY_* constants and did nothing. Translate the ones rlvm acts on;
+// ASCII keys (return, space, letters) have identical values in both.
+KeyCode SDL2KeyToRLKey(SDL_Keycode sym) {
+  switch (sym) {
+    case SDLK_UP:
+      return RLKEY_UP;
+    case SDLK_DOWN:
+      return RLKEY_DOWN;
+    case SDLK_RIGHT:
+      return RLKEY_RIGHT;
+    case SDLK_LEFT:
+      return RLKEY_LEFT;
+    case SDLK_LCTRL:
+      return RLKEY_LCTRL;
+    case SDLK_RCTRL:
+      return RLKEY_RCTRL;
+    default:
+      return KeyCode(sym);
+  }
+}
+
+}  // namespace
+
 void SDLEventSystem::HandleKeyDown(RLMachine& machine, SDL_Event& event) {
   switch (event.key.keysym.sym) {
     case SDLK_LSHIFT:
@@ -187,7 +216,7 @@ void SDLEventSystem::HandleKeyDown(RLMachine& machine, SDL_Event& event) {
     case SDLK_RETURN:
     case SDLK_f: {
       if ((event.key.keysym.mod & KMOD_ALT) ||
-          (event.key.keysym.mod & KMOD_META)) {
+          (event.key.keysym.mod & KMOD_GUI)) {
         machine.system().graphics().ToggleFullscreen();
 
         // Stop processing because we don't want to Dispatch this event, which
@@ -201,7 +230,10 @@ void SDLEventSystem::HandleKeyDown(RLMachine& machine, SDL_Event& event) {
       break;
   }
 
-  KeyCode code = KeyCode(event.key.keysym.sym);
+  KeyCode code = SDL2KeyToRLKey(event.key.keysym.sym);
+  // Arrows and Enter on a script-driven menu (see keyboard_selection.h).
+  if (HandleMenuKey(machine, code, true))
+    return;
   DispatchEvent(machine, bind(&EventListener::KeyStateChanged, _1, code, true));
 }
 
@@ -229,7 +261,9 @@ void SDLEventSystem::HandleKeyUp(RLMachine& machine, SDL_Event& event) {
       break;
   }
 
-  KeyCode code = KeyCode(event.key.keysym.sym);
+  KeyCode code = SDL2KeyToRLKey(event.key.keysym.sym);
+  if (HandleMenuKey(machine, code, false))
+    return;
   DispatchEvent(machine,
                 bind(&EventListener::KeyStateChanged, _1, code, false));
 }
@@ -266,12 +300,6 @@ void SDLEventSystem::HandleMouseButtonEvent(RLMachine& machine,
       case SDL_BUTTON_MIDDLE:
         button = MOUSE_MIDDLE;
         break;
-      case SDL_BUTTON_WHEELUP:
-        button = MOUSE_WHEELUP;
-        break;
-      case SDL_BUTTON_WHEELDOWN:
-        button = MOUSE_WHEELDOWN;
-        break;
       default:
         break;
     }
@@ -282,18 +310,36 @@ void SDLEventSystem::HandleMouseButtonEvent(RLMachine& machine,
   }
 }
 
-void SDLEventSystem::HandleActiveEvent(RLMachine& machine, SDL_Event& event) {
-  if (event.active.state & SDL_APPINPUTFOCUS) {
+void SDLEventSystem::HandleWheelEvent(RLMachine& machine, SDL_Event& event) {
+  if (mouse_inside_window_) {
+    MouseWheelType wheel_event = MOUSE_WHEEL_NONE;
+    if (event.wheel.y > 0)
+      wheel_event = MOUSE_WHEEL_UP;
+    else if (event.wheel.y < 0)
+      wheel_event = MOUSE_WHEEL_DOWN;
+
+    if (wheel_event != MOUSE_WHEEL_NONE) {
+      DispatchEvent(
+          machine,
+          bind(&EventListener::MouseWheelEvent, _1, wheel_event));
+    }
+  }
+}
+
+void SDLEventSystem::HandleWindowEvent(RLMachine& machine, SDL_Event& event) {
+  if (event.window.event == SDL_WINDOWEVENT_ENTER) {
     // Assume the mouse is inside the window. Actually checking the mouse
     // state doesn't work in the case where we mouse click on another window
     // that's partially covered by rlvm's window and then alt-tab back.
     mouse_inside_window_ = true;
 
     machine.system().graphics().MarkScreenAsDirty(GUT_MOUSE_MOTION);
-  } else if (event.active.state & SDL_APPMOUSEFOCUS) {
-    mouse_inside_window_ = event.active.gain == 1;
+  } else if (event.window.event == SDL_WINDOWEVENT_LEAVE) {
+    mouse_inside_window_ = false;
 
     // Force a mouse refresh:
     machine.system().graphics().MarkScreenAsDirty(GUT_MOUSE_MOTION);
+  } else if (event.window.event == SDL_WINDOWEVENT_EXPOSED) {
+    machine.system().graphics().ForceRefresh();
   }
 }

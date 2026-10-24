@@ -49,6 +49,7 @@ class ButtonObjectSelectLongOperation : public LongOperation {
   virtual void MouseMotion(const Point& point) override;
   virtual bool MouseButtonStateChanged(MouseButton mouseButton,
                                        bool pressed) override;
+  virtual bool KeyStateChanged(KeyCode key_code, bool pressed) override;
 
   // Overridden from LongOperation:
   virtual bool operator()(RLMachine& machine);

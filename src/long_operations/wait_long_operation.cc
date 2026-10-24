@@ -26,6 +26,7 @@
 
 #include "long_operations/wait_long_operation.h"
 
+
 #include "machine/rlmachine.h"
 #include "systems/base/event_listener.h"
 #include "systems/base/event_system.h"
@@ -102,6 +103,7 @@ bool WaitLongOperation::KeyStateChanged(KeyCode keyCode, bool pressed) {
 
   return false;
 }
+
 
 void WaitLongOperation::RecordMouseCursorPosition() {
   Point location = machine_.system().event().GetCursorPos();

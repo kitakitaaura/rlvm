@@ -28,8 +28,8 @@
 #include "systems/base/system.h"
 
 #include <boost/algorithm/string.hpp>
-#include <boost/filesystem/directory.hpp>
 #include <boost/filesystem/operations.hpp>
+#include <boost/filesystem/directory.hpp>
 #include <boost/filesystem/path.hpp>
 
 #include <algorithm>
@@ -48,6 +48,10 @@
 #include "modules/module_sys.h"
 #include "systems/base/event_system.h"
 #include "systems/base/graphics_system.h"
+
+#if defined(__EMSCRIPTEN__)
+#include <emscripten.h>
+#endif
 #include "systems/base/platform.h"
 #include "systems/base/rlvm_info.h"
 #include "systems/base/sound_system.h"
@@ -330,6 +334,10 @@ void System::ShowSystemInfo(RLMachine& machine) {
 boost::filesystem::path System::FindFile(
     const std::string& file_name,
     const std::vector<std::string>& extensions) {
+#if defined(__EMSCRIPTEN__)
+  EM_ASM({ console.log('[dbg] System::FindFile("' + UTF8ToString($0) + '") cache_empty=' + $1); },
+         file_name.c_str(), filesystem_cache_.empty() ? 1 : 0);
+#endif
   if (filesystem_cache_.empty())
     BuildFileSystemCache();
 
@@ -446,11 +454,23 @@ void System::CheckSyscomIndex(int index, const char* function) {
 }
 
 void System::BuildFileSystemCache() {
+#if defined(__EMSCRIPTEN__)
+  EM_ASM(console.log('[dbg] BuildFileSystemCache: entered'));
+#endif
   // First retrieve all the directories defined in the #FOLDNAME section.
   std::vector<std::string> valid_directories;
   Gameexe& gexe = gameexe();
+#if defined(__EMSCRIPTEN__)
+  EM_ASM(console.log('[dbg] BuildFileSystemCache: got gexe ref, calling filtering_begin'));
+#endif
   GameexeFilteringIterator it = gexe.filtering_begin("FOLDNAME");
+#if defined(__EMSCRIPTEN__)
+  EM_ASM(console.log('[dbg] BuildFileSystemCache: filtering_begin returned, calling filtering_end'));
+#endif
   GameexeFilteringIterator end = gexe.filtering_end();
+#if defined(__EMSCRIPTEN__)
+  EM_ASM(console.log('[dbg] BuildFileSystemCache: got FOLDNAME iterators, starting loop'));
+#endif
   for (; it != end; ++it) {
     std::string dir = it->ToString();
     if (!dir.empty()) {
@@ -458,10 +478,26 @@ void System::BuildFileSystemCache() {
       valid_directories.push_back(dir);
     }
   }
+#if defined(__EMSCRIPTEN__)
+  EM_ASM({ console.log('[dbg] BuildFileSystemCache: FOLDNAME loop done, ' + $0 + ' valid dirs'); },
+         (int)valid_directories.size());
+#endif
 
   fs::path gamepath(gexe("__GAMEPATH").ToString());
+#if defined(__EMSCRIPTEN__)
+  EM_ASM({ console.log('[dbg] BuildFileSystemCache: gamepath=' + UTF8ToString($0) + ', constructing directory_iterator'); },
+         gamepath.string().c_str());
+#endif
   fs::directory_iterator dir_end;
-  for (fs::directory_iterator dir(gamepath); dir != dir_end; ++dir) {
+  fs::directory_iterator dir(gamepath);
+#if defined(__EMSCRIPTEN__)
+  EM_ASM(console.log('[dbg] BuildFileSystemCache: directory_iterator constructed, entering loop'));
+#endif
+  for (; dir != dir_end; ++dir) {
+#if defined(__EMSCRIPTEN__)
+    EM_ASM({ console.log('[dbg] BuildFileSystemCache: top-level entry ' + UTF8ToString($0)); },
+           dir->path().filename().string().c_str());
+#endif
     if (fs::is_directory(dir->status())) {
       std::string lowername = dir->path().filename().string();
       to_lower(lowername);
@@ -471,11 +507,25 @@ void System::BuildFileSystemCache() {
       }
     }
   }
+#if defined(__EMSCRIPTEN__)
+  EM_ASM(console.log('[dbg] BuildFileSystemCache: loop complete'));
+#endif
 }
 
 void System::AddDirectoryToCache(const fs::path& directory) {
+#if defined(__EMSCRIPTEN__)
+  static int debug_entries_seen = 0;
+  EM_ASM({ console.log('[dbg] AddDirectoryToCache entering ' + UTF8ToString($0)); },
+         directory.string().c_str());
+#endif
   fs::directory_iterator dir_end;
   for (fs::directory_iterator dir(directory); dir != dir_end; ++dir) {
+#if defined(__EMSCRIPTEN__)
+    if (++debug_entries_seen % 200 == 0) {
+      EM_ASM({ console.log('[dbg] fs cache scan: ' + $0 + ' entries seen so far'); },
+             debug_entries_seen);
+    }
+#endif
     if (fs::is_directory(dir->status())) {
       AddDirectoryToCache(dir->path());
     } else {

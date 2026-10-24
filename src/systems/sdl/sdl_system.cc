@@ -27,7 +27,7 @@
 
 #include "systems/sdl/sdl_system.h"
 
-#include <SDL/SDL.h>
+#include <SDL.h>
 
 #include <sstream>
 

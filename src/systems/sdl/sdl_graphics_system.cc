@@ -25,15 +25,23 @@
 //
 // -----------------------------------------------------------------------
 
-#include "GL/glew.h"
-
 #include "systems/sdl/sdl_graphics_system.h"
 
-#include <SDL/SDL.h>
-#include <SDL/SDL_opengl.h>
+#include <SDL.h>
+#include <SDL_opengl.h>
 
-#if !defined(__APPLE__) && !defined(_WIN32)
-#include <SDL/SDL_image.h>
+#if defined(__EMSCRIPTEN__)
+#include <emscripten.h>
+// See wasm/gl_upload_compat.cc.
+extern "C" void WasmTexImage2D(unsigned target, int level, int internalformat,
+                               int width, int height, int border,
+                               unsigned format, unsigned type,
+                               const void* pixels);
+#define glTexImage2D WasmTexImage2D
+#endif
+
+#if !defined(__APPLE__) && !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+#include <SDL_image.h>
 #include "../resources/48/rlvm_icon_48.xpm"
 #endif
 
@@ -149,7 +157,7 @@ void SDLGraphicsSystem::EndFrame() {
 
   // Swap the buffers
   glFlush();
-  SDL_GL_SwapBuffers();
+  SDL_GL_SwapWindow(window_);
   ShowGLErrors();
 }
 
@@ -171,13 +179,17 @@ void SDLGraphicsSystem::RedrawLastFrame() {
       float x_cord = dx2 / float(screen_tex_width_);
       float y_cord = dy2 / float(screen_tex_height_);
 
+      // Colour repeated per vertex; see Texture::RenderToScreen.
       glColor4ub(255, 255, 255, 255);
       glTexCoord2f(0, y_cord);
       glVertex2i(dx1, dy1);
+      glColor4ub(255, 255, 255, 255);
       glTexCoord2f(x_cord, y_cord);
       glVertex2i(dx2, dy1);
+      glColor4ub(255, 255, 255, 255);
       glTexCoord2f(x_cord, 0);
       glVertex2i(dx2, dy2);
+      glColor4ub(255, 255, 255, 255);
       glTexCoord2f(0, 0);
       glVertex2i(dx1, dy2);
     }
@@ -188,7 +200,7 @@ void SDLGraphicsSystem::RedrawLastFrame() {
     glFlush();
 
     // Swap the buffers
-    SDL_GL_SwapBuffers();
+    SDL_GL_SwapWindow(window_);
     ShowGLErrors();
   }
 }
@@ -245,15 +257,14 @@ SDLGraphicsSystem::SDLGraphicsSystem(System& system, Gameexe& gameexe)
 
   SetWindowTitle();
 
-#if !defined(__APPLE__) && !defined(_WIN32)
+#if !defined(__APPLE__) && !defined(_WIN32) && !defined(__EMSCRIPTEN__)
   // We only set the icon on Linux because OSX will use the icns file
-  // automatically and this doesn't look too awesome.
+  // automatically and this doesn't look too awesome. No window icon concept
+  // exists for a browser canvas either.
   SDL_Surface* icon = IMG_ReadXPMFromArray(rlvm_icon_48);
   if (icon) {
-    SDL_SetColorKey(icon,
-                    SDL_SRCCOLORKEY,
-                    SDL_MapRGB(icon->format, 255, 255, 255));
-    SDL_WM_SetIcon(icon, NULL);
+    SDL_SetColorKey(icon, SDL_TRUE, SDL_MapRGB(icon->format, 255, 255, 255));
+    SDL_SetWindowIcon(window_, icon);
     SDL_FreeSurface(icon);
   }
 #endif
@@ -271,26 +282,16 @@ SDLGraphicsSystem::SDLGraphicsSystem(System& system, Gameexe& gameexe)
 }
 
 void SDLGraphicsSystem::SetupVideo() {
-  // Let's get some video information.
-  const SDL_VideoInfo* info = SDL_GetVideoInfo();
-  SDL_WM_SetCaption("rlvm", "rlvm");
+  // // Let's get some video information.
+  // const SDL_VideoInfo* info = SDL_GetVideoInfo();
 
-  if (!info) {
-    std::ostringstream ss;
-    ss << "Video query failed: " << SDL_GetError();
-    throw SystemError(ss.str());
-  }
+  // if (!info) {
+  //   std::ostringstream ss;
+  //   ss << "Video query failed: " << SDL_GetError();
+  //   throw SystemError(ss.str());
+  // }
 
-  int bpp = info->vfmt->BitsPerPixel;
-
-  // the flags to pass to SDL_SetVideoMode
-  int video_flags;
-  video_flags = SDL_OPENGL;            // Enable OpenGL in SDL
-  video_flags |= SDL_GL_DOUBLEBUFFER;  // Enable double buffering
-  video_flags |= SDL_SWSURFACE;
-
-  if (screen_mode() == 0)
-    video_flags |= SDL_FULLSCREEN;
+  // int bpp = info->vfmt->BitsPerPixel;
 
   // Sets up OpenGL double buffering
   SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
@@ -298,25 +299,13 @@ void SDLGraphicsSystem::SetupVideo() {
   SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
   SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
-  // Set the video mode
-  if ((screen_ = SDL_SetVideoMode(
-           screen_size().width(), screen_size().height(), bpp, video_flags)) ==
-      0) {
-    // This could happen for a variety of reasons,
-    // including DISPLAY not being set, the specified
-    // resolution not being available, etc.
-    std::ostringstream ss;
-    ss << "Video mode set failed: " << SDL_GetError();
-    throw SystemError(ss.str());
-  }
-
-  // Initialize glew
-  GLenum err = glewInit();
-  if (GLEW_OK != err) {
-    std::ostringstream oss;
-    oss << "Failed to initialize GLEW: " << glewGetErrorString(err);
-    throw SystemError(oss.str());
-  }
+  window_ = SDL_CreateWindow("rlvm",
+                             SDL_WINDOWPOS_UNDEFINED,
+                             SDL_WINDOWPOS_UNDEFINED,
+                             screen_size().width(),
+                             screen_size().height(),
+                             SDL_WINDOW_OPENGL);
+  gl_context_ = SDL_GL_CreateContext(window_);
 
   glEnable(GL_TEXTURE_2D);
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -342,7 +331,11 @@ void SDLGraphicsSystem::SetupVideo() {
   glDepthFunc(GL_LEQUAL);
 
   // Really Nice Perspective Calculations
+#if !defined(__EMSCRIPTEN__)
+  // No ES2/WebGL equivalent -- perspective-correct interpolation is the
+  // only behavior GLES2/WebGL implementations provide.
   glHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST);
+#endif
 
   // Full Brightness, 50% Alpha ( NEW )
   glColor4f(1.0f, 1.0f, 1.0f, 0.5f);
@@ -368,7 +361,18 @@ void SDLGraphicsSystem::SetupVideo() {
   ShowGLErrors();
 }
 
-SDLGraphicsSystem::~SDLGraphicsSystem() {}
+SDLGraphicsSystem::~SDLGraphicsSystem() {
+#if defined(__EMSCRIPTEN__)
+  // This body runs before the members are destroyed, and their textures
+  // free themselves through GL: with the context already gone, a fatal
+  // error's teardown crashed in glDeleteTextures ("Cannot read properties of
+  // undefined (reading 'deleteTexture')") and hid the real message. The page
+  // throws the whole engine away afterwards, context included.
+#else
+  SDL_GL_DeleteContext(gl_context_);
+  SDL_DestroyWindow(window_);
+#endif
+}
 
 void SDLGraphicsSystem::ExecuteGraphicsSystem(RLMachine& machine) {
   // For now, nothing, but later, we need to put all code each cycle
@@ -415,7 +419,7 @@ void SDLGraphicsSystem::SetWindowTitle() {
   // don't do this unnecessarily.
   std::string new_caption = oss.str();
   if (new_caption != currently_set_title_) {
-    SDL_WM_SetCaption(new_caption.c_str(), NULL);
+    SDL_SetWindowTitle(window_, new_caption.c_str());
     currently_set_title_ = new_caption;
   }
 }
@@ -437,7 +441,10 @@ void SDLGraphicsSystem::SetWindowSubtitle(const std::string& cp932str,
 void SDLGraphicsSystem::SetScreenMode(const int in) {
   GraphicsSystem::SetScreenMode(in);
 
-  SetupVideo();
+  // TODO(sdl2): We need to port fullscreen support here. The following sets
+  // the desktop to fullscreen, puts the renderer in the bottom right (!?) and
+  // then we can never get out of the mode.
+  SDL_SetWindowFullscreen(window_, in ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
 }
 
 void SDLGraphicsSystem::AllocateDC(int dc, Size size) {
@@ -546,14 +553,18 @@ static SDL_Surface* newSurfaceFromRGBAData(int w,
   // correctly while still using the appropriate alpha flags. So use the above
   // format with only the flags that would have been set by
   // SDL_DisplayFormat[Alpha].
-  Uint32 flags;
-  if (with_mask == ALPHA_MASK) {
-    flags = tmp->flags & (SDL_SRCALPHA | SDL_RLEACCELOK);
-  } else {
-    flags = tmp->flags & (SDL_SRCCOLORKEY | SDL_SRCALPHA | SDL_RLEACCELOK);
-  }
 
-  SDL_Surface* surf = SDL_ConvertSurface(tmp, tmp->format, flags);
+  // TODO(sdl2): port
+  //  Uint32 flags;
+  // if (with_mask == ALPHA_MASK) {
+  //   //flags = tmp->flags & (SDL_SRCALPHA | SDL_RLEACCELOK);
+  //   std::cerr << "with ALPHA_MASK" << std::endl;
+  // } else {
+  //   //flags = tmp->flags & (SDL_SRCCOLORKEY | SDL_SRCALPHA | SDL_RLEACCELOK);
+  //   std::cerr << "without ALPHA_MASK" << std::endl;
+  // }
+
+  SDL_Surface* surf = SDL_ConvertSurface(tmp, tmp->format, 0);
   SDL_FreeSurface(tmp);
   return surf;
 }
@@ -594,15 +605,32 @@ std::shared_ptr<const Surface> SDLGraphicsSystem::LoadSurfaceFromFile(
   fread(d.get(), size, 1, file);
   fclose(file);
 
+#if defined(__EMSCRIPTEN__)
+  EM_ASM({ console.log('[dbg] LoadSurfaceFromFile "' + UTF8ToString($0) + '" size=' + $1 + ', calling AssignConverter'); },
+         short_filename.c_str(), (int)size);
+#endif
+
   std::unique_ptr<GRPCONV> conv(
       GRPCONV::AssignConverter(d.get(), size, "???"));
   if (conv == 0) {
     throw SystemError("Failure in GRPCONV.");
   }
+
+#if defined(__EMSCRIPTEN__)
+  EM_ASM({ console.log('[dbg] AssignConverter returned, w=' + $0 + ' h=' + $1 + ', calling Read'); },
+         conv->Width(), conv->Height());
+#endif
+
   // do not free until SDL_FreeSurface() is called on the surface using it
   char* mem = (char*)malloc(conv->Width() * conv->Height() * 4 + 1024);
   SDL_Surface* s = 0;
-  if (conv->Read(mem)) {
+  bool read_ok = conv->Read(mem);
+
+#if defined(__EMSCRIPTEN__)
+  EM_ASM({ console.log('[dbg] Read returned ' + $0); }, read_ok ? 1 : 0);
+#endif
+
+  if (read_ok) {
     MaskType is_mask = conv->IsMask() ? ALPHA_MASK : NO_MASK;
     if (is_mask == ALPHA_MASK) {
       int len = conv->Width() * conv->Height();

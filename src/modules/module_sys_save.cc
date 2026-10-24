@@ -28,9 +28,9 @@
 #include "modules/module_sys_save.h"
 
 #include <boost/algorithm/string/predicate.hpp>
-#include <boost/filesystem/directory.hpp>
 #include <boost/filesystem/fstream.hpp>
 #include <boost/filesystem/operations.hpp>
+#include <boost/filesystem/directory.hpp>
 #include <boost/filesystem/path.hpp>
 
 #include <algorithm>

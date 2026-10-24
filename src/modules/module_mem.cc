@@ -63,7 +63,7 @@ struct setrng_0 : public RLOpcode<IntReference_T, IntReference_T> {
                   IntReferenceIterator first,
                   IntReferenceIterator last) {
     ++last;  // RealLive ranges are inclusive
-    std::fill(first, last, 0);
+    fill(first, last, 0);
   }
 };
 
@@ -77,7 +77,7 @@ struct setrng_1
                   IntReferenceIterator last,
                   int value) {
     ++last;  // RealLive ranges are inclusive
-    std::fill(first, last, value);
+    fill(first, last, value);
   }
 };
 
@@ -112,7 +112,7 @@ struct setarray_stepped
          it != values.end();
          ++it) {
       *origin = *it;
-      std::advance(origin, step);
+      advance(origin, step);
     }
   }
 };
@@ -129,7 +129,7 @@ struct setrng_stepped_0
                   int count) {
     for (int i = 0; i < count; ++i) {
       *origin = 0;
-      std::advance(origin, step);
+      advance(origin, step);
     }
   }
 };
@@ -149,7 +149,7 @@ struct setrng_stepped_1 : public RLOpcode<IntReference_T,
                   int value) {
     for (int i = 0; i < count; ++i) {
       *origin = value;
-      std::advance(origin, step);
+      advance(origin, step);
     }
   }
 };
@@ -168,7 +168,7 @@ struct cpyvars : public RLOpcode<IntReference_T,
          it != values.end();
          ++it) {
       IntReferenceIterator irIt = *it;
-      std::advance(irIt, offset);
+      advance(irIt, offset);
       *origin++ = *irIt;
     }
   }
@@ -182,7 +182,7 @@ struct sum : public RLStoreOpcode<IntReference_T, IntReference_T> {
                  IntReferenceIterator first,
                  IntReferenceIterator last) {
     last++;
-    return std::accumulate(first, last, 0);
+    return accumulate(first, last, 0);
   }
 };
 
@@ -199,7 +199,7 @@ struct sums
     for (auto it = ranges.cbegin(); it != ranges.cend(); ++it) {
       IntReferenceIterator last = std::get<1>(*it);
       ++last;
-      total += std::accumulate(std::get<0>(*it), last, 0);
+      total += accumulate(std::get<0>(*it), last, 0);
     }
     return total;
   }

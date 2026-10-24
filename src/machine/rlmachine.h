@@ -210,6 +210,11 @@ class RLMachine {
   // Returns the actual Scenario on the top top of the call stack.
   const libreallive::Scenario& Scenario() const;
 
+  // noberu: where the instruction pointer of the innermost scene frame sits,
+  // counted in instructions from the start of its scenario (the "@n" of
+  // rlvm_dump_scene). Names a choice in a script without #line markers.
+  int InstructionIndex() const;
+
   // ------------------------------------------------ [ Execution interface ]
   // Normally, execute_next_instruction will call RunOnMachine() on
   // whatever BytecodeElement is currently pointed to by the

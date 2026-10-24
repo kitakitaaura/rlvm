@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>rlvm wasm build</title>
+  <style>
+    body { background: #111; color: #eee; font-family: sans-serif; }
+    canvas { background: #000; display: block; margin: 0 auto; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" width="640" height="480" oncontextmenu="event.preventDefault()"></canvas>
+  <pre id="output" style="white-space: pre-wrap;"></pre>
+  <script>
+    var Module = {
+      canvas: document.getElementById('canvas'),
+      print: (function() {
+        var el = document.getElementById('output');
+        return function(text) { el.textContent += text + "\n"; console.log(text); };
+      })(),
+      printErr: function(text) { console.error(text); }
+    };
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>

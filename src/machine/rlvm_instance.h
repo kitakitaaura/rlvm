@@ -28,11 +28,17 @@
 #define SRC_MACHINE_RLVM_INSTANCE_H_
 
 #include <boost/filesystem/operations.hpp>
+#include <memory>
 #include <string>
 
+class Gameexe;
 class Platform;
 class RLMachine;
 class System;
+class SDLSystem;
+namespace libreallive {
+class Archive;
+}
 
 // The main, cross platform emulator class. Has template methods for
 // implementing platform specific GUI.
@@ -41,10 +47,34 @@ class RLVMInstance {
   RLVMInstance();
   virtual ~RLVMInstance();
 
-  // Runs the main emulation loop.
+  // Runs the main emulation loop. Blocks until the machine halts. Implemented
+  // in terms of Init()/RunFrame()/Shutdown() below.
   void Run(const boost::filesystem::path& gamepath);
 
+  // Two-phase API for platforms (e.g. Emscripten) that can't block in a
+  // while loop and need to yield control between frames.
+  //
+  // Loads the game at gamepath and prepares the machine to run. Returns
+  // false if setup failed (a fatal error was already reported via
+  // ReportFatalError) or if there's nothing left to run (e.g. --dump-seen
+  // already did its job and exited). Returns true if the caller should now
+  // repeatedly call RunFrame().
+  bool Init(const boost::filesystem::path& gamepath);
+
+  // Runs one iteration of the main loop (pumps events, executes a slice of
+  // instructions, redraws). Returns true if the caller should keep calling
+  // RunFrame(), false once the machine has halted (or hit a fatal error) —
+  // at which point Shutdown() has already been called automatically.
+  bool RunFrame();
+
+  // Saves global memory. Called automatically by RunFrame() once the
+  // machine halts; exposed in case a caller needs to force a flush.
+  void Shutdown();
+
   void set_seen_start(int in) { seen_start_ = in; }
+
+  // The running machine, or null before Init() (used by wasm debug helpers).
+  RLMachine* machine() { return rlmachine_.get(); }
   void set_memory() { memory_ = true; }
   void set_undefined_opcodes() { undefined_opcodes_ = true; }
   void set_count_undefined() { count_undefined_copcodes_ = true; }
@@ -110,6 +140,17 @@ class RLVMInstance {
 
   // Dumps pseudo-kepago of the current seen to stdout and exit if not -1.
   int dump_seen_;
+
+  // Live session state, populated by Init() and torn down by Shutdown().
+  // Only valid between a successful Init() and the point RunFrame() returns
+  // false.
+  //
+  // gameexe_ must be owned here (not a local in Init()): SDLSystem keeps a
+  // Gameexe& for its whole lifetime. Declared first so it's destroyed last.
+  std::unique_ptr<Gameexe> gameexe_;
+  std::unique_ptr<libreallive::Archive> arc_;
+  std::unique_ptr<SDLSystem> sdl_system_;
+  std::unique_ptr<RLMachine> rlmachine_;
 };
 
 #endif  // SRC_MACHINE_RLVM_INSTANCE_H_

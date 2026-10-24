@@ -54,6 +54,9 @@ class SelectionElement {
 
   void Render();
 
+  // Where it sits on screen (for keyboard selection).
+  Rect GetRect() const;
+
  private:
   bool IsHighlighted(const Point& p);
 

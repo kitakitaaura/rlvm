@@ -24,10 +24,13 @@
 // Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 // -----------------------------------------------------------------------
 
-#include "GL/glew.h"
+#include <SDL.h>
+#include <SDL_opengl.h>
+#include <SDL_opengl_glext.h>
 
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(__EMSCRIPTEN__)
 #include <iostream>
+#include <string>
 #endif
 
 #include "systems/base/graphics_object.h"
@@ -104,11 +107,27 @@ const char kObjectShader[] =
     "  gl_FragColor = pixel;\n"
     "}\n";
 
+#if defined(__EMSCRIPTEN__)
+// Emscripten's immediate-mode emulation only carries texture coordinates for
+// unit 0, so the mask's coordinates (unit 1) are derived here: they share the
+// x coordinate and are mirrored vertically within the quad.
+const char kColorMaskVertexShader[] =
+    "uniform float mask_y_sum;\n"
+    "void main() {\n"
+    "  gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;\n"
+    "  gl_TexCoord[0] = gl_MultiTexCoord0;\n"
+    "  gl_TexCoord[1] = vec4(gl_MultiTexCoord0.x,\n"
+    "                        mask_y_sum - gl_MultiTexCoord0.y, 0.0, 1.0);\n"
+    "  gl_FrontColor = gl_Color;\n"
+    "}\n";
+#endif
+
 }  // namespace
 
 GLuint Shaders::color_mask_program_object_id_ = 0;
 GLint Shaders::color_mask_current_values_ = 0;
 GLint Shaders::color_mask_mask_ = 0;
+GLint Shaders::color_mask_mask_y_sum_ = 0;
 
 GLuint Shaders::object_program_object_id_ = 0;
 GLint Shaders::object_image_ = 0;
@@ -122,16 +141,17 @@ GLint Shaders::object_invert_ = 0;
 // static
 void Shaders::Reset() {
   if (color_mask_program_object_id_) {
-    glDeleteObjectARB(color_mask_program_object_id_);
+    glDeleteProgram(color_mask_program_object_id_);
     DebugShowGLErrors();
 
     color_mask_program_object_id_ = 0;
     color_mask_current_values_ = 0;
     color_mask_mask_ = 0;
+    color_mask_mask_y_sum_ = 0;
   }
 
   if (object_program_object_id_) {
-    glDeleteObjectARB(object_program_object_id_);
+    glDeleteProgram(object_program_object_id_);
     DebugShowGLErrors();
 
     object_program_object_id_ = 0;
@@ -148,7 +168,12 @@ void Shaders::Reset() {
 // static
 GLuint Shaders::getColorMaskProgram() {
   if (color_mask_program_object_id_ == 0) {
+#if defined(__EMSCRIPTEN__)
+    buildShader(kColorMaskShader, &color_mask_program_object_id_,
+                kColorMaskVertexShader);
+#else
     buildShader(kColorMaskShader, &color_mask_program_object_id_);
+#endif
   }
 
   return color_mask_program_object_id_;
@@ -157,7 +182,7 @@ GLuint Shaders::getColorMaskProgram() {
 GLint Shaders::getColorMaskUniformCurrentValues() {
   if (color_mask_current_values_ == 0) {
     color_mask_current_values_ =
-        glGetUniformLocationARB(getColorMaskProgram(), "current_values");
+        glGetUniformLocation(getColorMaskProgram(), "current_values");
     if (color_mask_current_values_ == -1)
       throw SystemError("Bad uniform value: current_values");
   }
@@ -167,13 +192,26 @@ GLint Shaders::getColorMaskUniformCurrentValues() {
 
 GLint Shaders::getColorMaskUniformMask() {
   if (color_mask_mask_ == 0) {
-    color_mask_mask_ = glGetUniformLocationARB(getColorMaskProgram(), "mask");
+    color_mask_mask_ = glGetUniformLocation(getColorMaskProgram(), "mask");
     if (color_mask_mask_ == -1)
       throw SystemError("Bad uniform value: mask");
   }
 
   return color_mask_mask_;
 }
+
+#if defined(__EMSCRIPTEN__)
+GLint Shaders::getColorMaskUniformMaskYSum() {
+  if (color_mask_mask_y_sum_ == 0) {
+    color_mask_mask_y_sum_ =
+        glGetUniformLocation(getColorMaskProgram(), "mask_y_sum");
+    if (color_mask_mask_y_sum_ == -1)
+      throw SystemError("Bad uniform value: mask_y_sum");
+  }
+
+  return color_mask_mask_y_sum_;
+}
+#endif
 
 GLuint Shaders::GetObjectProgram() {
   if (object_program_object_id_ == 0) {
@@ -185,7 +223,7 @@ GLuint Shaders::GetObjectProgram() {
 
 GLint Shaders::GetObjectUniformImage() {
   if (object_image_ == 0) {
-    object_image_ = glGetUniformLocationARB(GetObjectProgram(), "image");
+    object_image_ = glGetUniformLocation(GetObjectProgram(), "image");
     if (object_image_ == -1)
       throw SystemError("Bad uniform value: image");
   }
@@ -195,28 +233,28 @@ GLint Shaders::GetObjectUniformImage() {
 
 void Shaders::loadObjectUniformFromGraphicsObject(const GraphicsObject& go) {
   RGBAColour colour = go.colour();
-  glUniform4fARB(Shaders::GetObjectUniformColour(),
+  glUniform4f(Shaders::GetObjectUniformColour(),
                  colour.r_float(),
                  colour.g_float(),
                  colour.b_float(),
                  colour.a_float());
 
   RGBColour tint = go.tint();
-  glUniform3fARB(Shaders::GetObjectUniformTint(),
+  glUniform3f(Shaders::GetObjectUniformTint(),
                  tint.r_float(),
                  tint.g_float(),
                  tint.b_float());
 
-  glUniform1fARB(Shaders::GetObjectUniformLight(), go.light() / 255.0f);
+  glUniform1f(Shaders::GetObjectUniformLight(), go.light() / 255.0f);
 
-  glUniform1fARB(Shaders::GetObjectUniformMono(), go.mono() / 255.0f);
+  glUniform1f(Shaders::GetObjectUniformMono(), go.mono() / 255.0f);
 
-  glUniform1fARB(Shaders::GetObjectUniformInvert(), go.invert() / 255.0f);
+  glUniform1f(Shaders::GetObjectUniformInvert(), go.invert() / 255.0f);
 }
 
 GLint Shaders::GetObjectUniformColour() {
   if (object_colour_ == 0) {
-    object_colour_ = glGetUniformLocationARB(GetObjectProgram(), "colour");
+    object_colour_ = glGetUniformLocation(GetObjectProgram(), "colour");
     if (object_colour_ == -1)
       throw SystemError("Bad uniform value: colour");
   }
@@ -226,7 +264,7 @@ GLint Shaders::GetObjectUniformColour() {
 
 GLint Shaders::GetObjectUniformTint() {
   if (object_tint_ == 0) {
-    object_tint_ = glGetUniformLocationARB(GetObjectProgram(), "tint");
+    object_tint_ = glGetUniformLocation(GetObjectProgram(), "tint");
     if (object_tint_ == -1)
       throw SystemError("Bad uniform value: tint");
   }
@@ -236,7 +274,7 @@ GLint Shaders::GetObjectUniformTint() {
 
 GLint Shaders::GetObjectUniformLight() {
   if (object_light_ == 0) {
-    object_light_ = glGetUniformLocationARB(GetObjectProgram(), "light");
+    object_light_ = glGetUniformLocation(GetObjectProgram(), "light");
     if (object_light_ == -1)
       throw SystemError("Bad uniform value: light");
   }
@@ -246,7 +284,7 @@ GLint Shaders::GetObjectUniformLight() {
 
 GLint Shaders::GetObjectUniformAlpha() {
   if (object_alpha_ == 0) {
-    object_alpha_ = glGetUniformLocationARB(GetObjectProgram(), "alpha");
+    object_alpha_ = glGetUniformLocation(GetObjectProgram(), "alpha");
     if (object_alpha_ == -1)
       throw SystemError("Bad uniform value: alpha");
   }
@@ -256,7 +294,7 @@ GLint Shaders::GetObjectUniformAlpha() {
 
 GLint Shaders::GetObjectUniformMono() {
   if (object_mono_ == 0) {
-    object_mono_ = glGetUniformLocationARB(GetObjectProgram(), "mono");
+    object_mono_ = glGetUniformLocation(GetObjectProgram(), "mono");
     if (object_mono_ == -1)
       throw SystemError("Bad uniform value: mono");
   }
@@ -266,7 +304,7 @@ GLint Shaders::GetObjectUniformMono() {
 
 GLint Shaders::GetObjectUniformInvert() {
   if (object_invert_ == 0) {
-    object_invert_ = glGetUniformLocationARB(GetObjectProgram(), "invert");
+    object_invert_ = glGetUniformLocation(GetObjectProgram(), "invert");
     if (object_invert_ == -1)
       throw SystemError("Bad uniform value: invert");
   }
@@ -275,33 +313,70 @@ GLint Shaders::GetObjectUniformInvert() {
 }
 
 // static
-void Shaders::buildShader(const char* shader, GLuint* program_object) {
-  GLuint shader_object = glCreateShaderObjectARB(GL_FRAGMENT_SHADER_ARB);
+void Shaders::buildShader(const char* shader,
+                          GLuint* program_object,
+                          const char* vertex_shader) {
+  GLuint shader_object = glCreateShader(GL_FRAGMENT_SHADER);
   DebugShowGLErrors();
 
-  glShaderSourceARB(shader_object, 1, &shader, NULL);
+  glShaderSource(shader_object, 1, &shader, NULL);
   DebugShowGLErrors();
 
-  glCompileShaderARB(shader_object);
+  glCompileShader(shader_object);
   DebugShowGLErrors();
 
-#ifndef NDEBUG
+#if !defined(NDEBUG) || defined(__EMSCRIPTEN__)
   GLint blen = 0;
   GLsizei slen = 0;
   glGetShaderiv(shader_object, GL_INFO_LOG_LENGTH, &blen);
   if (blen > 1) {
     GLchar* compiler_log = new GLchar[blen];
-    glGetInfoLogARB(shader_object, blen, &slen, compiler_log);
+    glGetShaderInfoLog(shader_object, blen, &slen, compiler_log);
     std::cout << "compiler_log: " << std::endl << compiler_log << std::endl;
     delete[] compiler_log;
   }
 #endif
 
-  *program_object = glCreateProgramObjectARB();
-  glAttachObjectARB(*program_object, shader_object);
+  *program_object = glCreateProgram();
+  glAttachShader(*program_object, shader_object);
   DebugShowGLErrors();
 
-  glLinkProgramARB(*program_object);
-  glDeleteObjectARB(shader_object);
+#if defined(__EMSCRIPTEN__)
+  // Desktop GL links fragment-only programs against the fixed-function
+  // vertex stage; WebGL requires an explicit vertex shader or the link fails
+  // and every glGetUniformLocation() returns -1. Emscripten's legacy GL
+  // emulation rewrites these fixed-function names into its own attributes,
+  // varyings and matrix uniforms (see libglemu.js shaderSource).
+  static const char kPassThroughVertexShader[] =
+      "void main() {\n"
+      "  gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;\n"
+      "  gl_TexCoord[0] = gl_MultiTexCoord0;\n"
+      "  gl_TexCoord[1] = gl_MultiTexCoord1;\n"
+      "  gl_FrontColor = gl_Color;\n"
+      "}\n";
+  const char* vertex_source =
+      vertex_shader ? vertex_shader : kPassThroughVertexShader;
+  GLuint vertex_object = glCreateShader(GL_VERTEX_SHADER);
+  glShaderSource(vertex_object, 1, &vertex_source, NULL);
+  glCompileShader(vertex_object);
+  glAttachShader(*program_object, vertex_object);
+#endif
+
+  glLinkProgram(*program_object);
+  glDeleteShader(shader_object);
+#if defined(__EMSCRIPTEN__)
+  glDeleteShader(vertex_object);
+
+  GLint linked = GL_FALSE;
+  glGetProgramiv(*program_object, GL_LINK_STATUS, &linked);
+  if (!linked) {
+    GLint llen = 0;
+    glGetProgramiv(*program_object, GL_INFO_LOG_LENGTH, &llen);
+    std::string link_log(llen > 1 ? llen : 1, '\0');
+    if (llen > 1)
+      glGetProgramInfoLog(*program_object, llen, NULL, &link_log[0]);
+    std::cerr << "shader link failed: " << link_log << std::endl;
+  }
+#endif
   ShowGLErrors();
 }
